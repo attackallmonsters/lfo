@@ -11,17 +11,18 @@ typedef float (*lfo_func_ptr)(t_lfo_tilde *);
 typedef struct t_lfo_tilde
 {
     t_object x_obj;
-    t_float f_phase;
-    t_float f_freq;
-    t_float f_inc;
-    t_float f_sr;
+    t_float phase;
+    t_float freq;
+    t_float phaseInc;
+    t_float samplerate;
     t_float last_val;
-    t_float f_offset;
-    t_float f_depth;
-    t_float f_shape;
-    t_float f_pw;
+    t_float offset;
+    t_float depth;
+    t_float shape;
+    t_float pw;
     t_float smooth_val;
     t_float smooth_coeff;
+    t_float idleSignal;
     bool oneshot_enabled;
     lfo_func_ptr lfo_func;
     t_outlet *x_out_sig;
@@ -41,33 +42,33 @@ inline float shaped_ramp(float x, float shape)
 // --- LFO functions ---
 float lfo_sine(t_lfo_tilde *x)
 {
-    return std::sin(x->f_phase * 2.0 * M_PI);
+    return std::sin(x->phase * 2.0 * M_PI);
 }
 
 float lfo_rampup(t_lfo_tilde *x)
 {
-    float shaped = shaped_ramp(x->f_phase, x->f_shape);
+    float shaped = shaped_ramp(x->phase, x->shape);
     return 2.0f * shaped - 1.0f;
 }
 
 float lfo_rampdown(t_lfo_tilde *x)
 {
-    float shaped = shaped_ramp(x->f_phase, x->f_shape);
+    float shaped = shaped_ramp(x->phase, x->shape);
     return 1.0f - 2.0f * shaped;
 }
 
 float lfo_triangle(t_lfo_tilde *x)
 {
-    float p = x->f_phase * 2.0f;
+    float p = x->phase * 2.0f;
     if (p < 1.0f)
-        return 2.0f * shaped_ramp(p, x->f_shape) - 1.0f;
+        return 2.0f * shaped_ramp(p, x->shape) - 1.0f;
     else
-        return 1.0f - 2.0f * shaped_ramp(p - 1.0f, x->f_shape);
+        return 1.0f - 2.0f * shaped_ramp(p - 1.0f, x->shape);
 }
 
 float lfo_square(t_lfo_tilde *x)
 {
-    return (x->f_phase < x->f_pw) ? 1.0f : -1.0f;
+    return (x->phase < x->pw) ? 1.0f : -1.0f;
 }
 
 float lfo_random(t_lfo_tilde *x)
@@ -77,23 +78,23 @@ float lfo_random(t_lfo_tilde *x)
 
 void lfo_tilde_reset(t_lfo_tilde *x)
 {
-    x->f_phase = 0.0f;
+    x->phase = 0.0f;
     outlet_bang(x->x_out_bang);
 }
 
 void lfo_tilde_setoffset(t_lfo_tilde *x, t_floatarg f)
 {
-    x->f_offset = f;
+    x->offset = f;
 }
 
 void lfo_tilde_setdepth(t_lfo_tilde *x, t_floatarg f)
 {
-    x->f_depth = f;
+    x->depth = f;
 }
 
 void lfo_tilde_setshape(t_lfo_tilde *x, t_floatarg f)
 {
-    x->f_shape = f;
+    x->shape = f;
 }
 
 void lfo_tilde_setpw(t_lfo_tilde *x, t_floatarg f)
@@ -102,7 +103,7 @@ void lfo_tilde_setpw(t_lfo_tilde *x, t_floatarg f)
         f = 0.01f;
     if (f > 0.99f)
         f = 0.99f;
-    x->f_pw = f;
+    x->pw = f;
 }
 
 t_int *lfo_tilde_perform(t_int *w)
@@ -111,16 +112,16 @@ t_int *lfo_tilde_perform(t_int *w)
     t_sample *out = (t_sample *)(w[2]);
     int n = (int)(w[3]);
 
-    if (x->f_freq <= 0.0f)
+    if (x->freq <= 0.0f)
     {
-        x->f_phase = 0.0f;
+        x->phase = 0.0f;
         for (int i = 0; i < n; i++)
-            out[i] = 0.0f;
+            out[i] = x->idleSignal;
         return (w + 4);
     }
 
-    float phase = x->f_phase;
-    float inc = x->f_inc;
+    float phase = x->phase;
+    float inc = x->phaseInc;
     float val = 0.0f;
 
     for (int i = 0; i < n; i++)
@@ -131,11 +132,11 @@ t_int *lfo_tilde_perform(t_int *w)
         }
         else
         {
-            x->f_phase = phase;
+            x->phase = phase;
             val = x->lfo_func(x);
         }
 
-        float target = val * x->f_depth + x->f_offset;
+        float target = val * x->depth + x->offset;
         x->smooth_val = x->smooth_val + x->smooth_coeff * (target - x->smooth_val);
         out[i] = x->smooth_val;
 
@@ -152,7 +153,7 @@ t_int *lfo_tilde_perform(t_int *w)
         }
     }
 
-    x->f_phase = phase;
+    x->phase = phase;
     return (w + 4);
 }
 
@@ -167,15 +168,15 @@ void lfo_tilde_setsmooth(t_lfo_tilde *x, t_floatarg f)
 
 void lfo_tilde_dsp(t_lfo_tilde *x, t_signal **sp)
 {
-    x->f_sr = sp[0]->s_sr;
-    x->f_inc = x->f_freq / x->f_sr;
+    x->samplerate = sp[0]->s_sr;
+    x->phaseInc = x->freq / x->samplerate;
     dsp_add(lfo_tilde_perform, 3, x, sp[0]->s_vec, sp[0]->s_n);
 }
 
 void lfo_tilde_setfreq(t_lfo_tilde *x, t_floatarg f)
 {
-    x->f_freq = fmax(0.0f, f);
-    x->f_inc = (x->f_freq > 0.0f) ? x->f_freq / x->f_sr : 0.0f;
+    x->freq = fmax(0.0f, f);
+    x->phaseInc = (x->freq > 0.0f) ? x->freq / x->samplerate : 0.0f;
 }
 
 lfo_func_ptr lfo_table[] = {
@@ -196,17 +197,18 @@ void lfo_tilde_settype(t_lfo_tilde *x, t_floatarg f)
 void *lfo_tilde_new(t_floatarg f)
 {
     t_lfo_tilde *x = (t_lfo_tilde *)pd_new(lfo_tilde_class);
-    x->f_freq = f > 0 ? f : 0.0f;
-    x->f_phase = 0.0f;
+    x->idleSignal = f > 0 ? f : 0.0f;
+    x->freq = 0.0;
+    x->phase = 0.0f;
     x->last_val = 0.0f;
-    x->f_sr = 44100.0f;
-    x->f_shape = 0.0f;
-    x->f_offset = 0.0f;
-    x->f_depth = 1.0f;
-    x->f_pw = 0.5f;
+    x->samplerate = 44100.0f;
+    x->shape = 0.0f;
+    x->offset = 0.0f;
+    x->depth = 1.0f;
+    x->pw = 0.5f;
     x->smooth_val = 0.0f;
     x->smooth_coeff = 0.9f;
-    x->f_inc = x->f_freq / x->f_sr;
+    x->phaseInc = x->freq / x->samplerate;
     x->lfo_func = lfo_sine;
 
     x->x_out_sig = outlet_new(&x->x_obj, &s_signal);
