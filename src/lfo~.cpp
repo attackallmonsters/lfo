@@ -1,4 +1,4 @@
-// lfo~.cpp – Efficient LFO external for Pure Data
+// lfo~.cpp – Efficient LFO external for Pure Data with smoothing for hard edges
 #include "m_pd.h"
 #include <cmath>
 #include <cstdlib>
@@ -20,6 +20,8 @@ typedef struct t_lfo_tilde
     t_float f_depth;
     t_float f_shape;
     t_float f_pw;
+    t_float smooth_val;
+    t_float smooth_coeff;
     bool oneshot_enabled;
     lfo_func_ptr lfo_func;
     t_outlet *x_out_sig;
@@ -39,7 +41,6 @@ inline float shaped_ramp(float x, float shape)
 // --- LFO functions ---
 float lfo_sine(t_lfo_tilde *x)
 {
-    // Sine bleibt unverändert – shape hat hier keinen Effekt
     return std::sin(x->f_phase * 2.0 * M_PI);
 }
 
@@ -97,7 +98,6 @@ void lfo_tilde_setshape(t_lfo_tilde *x, t_floatarg f)
 
 void lfo_tilde_setpw(t_lfo_tilde *x, t_floatarg f)
 {
-    // Begrenzen auf sinnvolle Werte
     if (f < 0.01f)
         f = 0.01f;
     if (f > 0.99f)
@@ -135,18 +135,16 @@ t_int *lfo_tilde_perform(t_int *w)
             val = x->lfo_func(x);
         }
 
-        // Apply depth & offset
-        out[i] = val * x->f_depth + x->f_offset;
+        float target = val * x->f_depth + x->f_offset;
+        x->smooth_val = x->smooth_val + x->smooth_coeff * (target - x->smooth_val);
+        out[i] = x->smooth_val;
 
-        // Phase advance
         phase += inc;
 
-        // Wrap
         if (phase >= 1.0f)
         {
             phase -= 1.0f;
 
-            // Nur für random: neuen Sample vorbereiten
             if (x->lfo_func == lfo_random)
                 x->last_val = 2.0f * ((float)rand() / RAND_MAX) - 1.0f;
 
@@ -158,7 +156,15 @@ t_int *lfo_tilde_perform(t_int *w)
     return (w + 4);
 }
 
-// --- DSP setup ---
+void lfo_tilde_setsmooth(t_lfo_tilde *x, t_floatarg f)
+{
+    if (f < 0.0f)
+        f = 0.0f;
+    if (f > 1.0f)
+        f = 1.0f;
+    x->smooth_coeff = 1.0f - f;
+}
+
 void lfo_tilde_dsp(t_lfo_tilde *x, t_signal **sp)
 {
     x->f_sr = sp[0]->s_sr;
@@ -166,14 +172,12 @@ void lfo_tilde_dsp(t_lfo_tilde *x, t_signal **sp)
     dsp_add(lfo_tilde_perform, 3, x, sp[0]->s_vec, sp[0]->s_n);
 }
 
-// --- Set frequency ---
 void lfo_tilde_setfreq(t_lfo_tilde *x, t_floatarg f)
 {
     x->f_freq = fmax(0.0f, f);
     x->f_inc = (x->f_freq > 0.0f) ? x->f_freq / x->f_sr : 0.0f;
 }
 
-// --- Set type using function table ---
 lfo_func_ptr lfo_table[] = {
     lfo_sine,
     lfo_rampup,
@@ -189,11 +193,10 @@ void lfo_tilde_settype(t_lfo_tilde *x, t_floatarg f)
         x->lfo_func = lfo_table[type];
 }
 
-// --- Constructor ---
 void *lfo_tilde_new(t_floatarg f)
 {
     t_lfo_tilde *x = (t_lfo_tilde *)pd_new(lfo_tilde_class);
-    x->f_freq = f > 0 ? f : 1.0f;
+    x->f_freq = f > 0 ? f : 0.0f;
     x->f_phase = 0.0f;
     x->last_val = 0.0f;
     x->f_sr = 44100.0f;
@@ -201,6 +204,8 @@ void *lfo_tilde_new(t_floatarg f)
     x->f_offset = 0.0f;
     x->f_depth = 1.0f;
     x->f_pw = 0.5f;
+    x->smooth_val = 0.0f;
+    x->smooth_coeff = 0.9f;
     x->f_inc = x->f_freq / x->f_sr;
     x->lfo_func = lfo_sine;
 
@@ -210,7 +215,6 @@ void *lfo_tilde_new(t_floatarg f)
     return (void *)x;
 }
 
-// --- Setup ---
 extern "C"
 {
     void lfo_tilde_setup(void)
@@ -227,6 +231,7 @@ extern "C"
         class_addmethod(lfo_tilde_class, (t_method)lfo_tilde_setdepth, gensym("depth"), A_DEFFLOAT, A_NULL);
         class_addmethod(lfo_tilde_class, (t_method)lfo_tilde_setshape, gensym("shape"), A_NULL);
         class_addmethod(lfo_tilde_class, (t_method)lfo_tilde_setpw, gensym("pw"), A_DEFFLOAT, A_NULL);
+        class_addmethod(lfo_tilde_class, (t_method)lfo_tilde_setsmooth, gensym("smooth"), A_DEFFLOAT, A_NULL);
         class_addmethod(lfo_tilde_class, (t_method)lfo_tilde_reset, gensym("reset"), A_NULL);
     }
 }
